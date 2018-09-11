@@ -310,7 +310,10 @@
 			            this.Root = null;
 			        }
 
-                    // returns [node, distance]
+			        // returns [node, distance]
+			        // Not completely sure about this, need to think about it some more.
+			        // Seems like it might not get the best distance for some sparse 
+                    // point distributions.
 			        FindNearestNode(x, y) {
 			            console.log("Closest node");
 			            if (!this.Root)
