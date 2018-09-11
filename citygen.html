@@ -102,6 +102,17 @@
                             (this.Min.z <= position.z && this.Max.z >= position.z));
 			        }
 
+			        ContainedInBoundingSphere(position) {
+                        // Lame
+			            let tempVec = new THREE.Vector3(0, 0, 0);
+			            tempVec.copy(this.GetCenter());
+			            let extents = this.GetExtents();
+			            tempVec.sub(position);
+			            if (tempVec.length() <= extents.length())
+			                return true;
+			            return false;
+			        }
+
 			        GetExtents() {
                         // This is super lame
 			            let tempVec = new THREE.Vector3(0,0,0);
@@ -147,23 +158,20 @@
 			            this.MaxNodes = 7;
 			        }
 
-                    // Returns [id, distance] (null, null if no containment)
-			        FindNearestNode(position, graph)
+                    // Shouldn't be called externally
+			        GetDistanceInternal(position, graph)
 			        {
-
 			            // Leaf node
-			            if (!this.FirstChild && !this.SecondChild)
-			            {
+			            if (!this.FirstChild && !this.SecondChild) {
 			                let bestDistance = null;
 			                let bestId = null;
-			                for (let i = 0; i < this.NodeIds.length; i++)
-			                {
-			                    let nodePosition = graph.GetNode(this.NodeIds[i]);
+			                for (let i = 0; i < this.NodeIds.length; i++) {
+			                    let nodePosition = graph.GetNode(this.NodeIds[i]).Position;
+                                // Lame
 			                    let displacement = new THREE.Vector3(nodePosition.x, nodePosition.y, nodePosition.z);
 			                    displacement.sub(position);
 			                    let distance = displacement.length();
-			                    if (!bestDistance || distance < bestDistance)
-			                    {
+			                    if (!bestDistance || distance < bestDistance) {
 			                        bestDistance = distance;
 			                        bestId = this.NodeIds[i];
 			                    }
@@ -172,7 +180,27 @@
 			                return [bestId, bestDistance];
 			            }
 
-			            if (!this.Bounds.Contains(position))
+			            let firstIdDistanceArray = this.FirstChild.GetDistanceInternal(position, graph);
+			            let secondIdDistanceArray = this.SecondChild.GetDistanceInternal(position, graph);
+
+                        // These shouldn't return null
+			            if (firstIdDistanceArray[1] <= secondIdDistanceArray[1])
+			                return firstIdDistanceArray;
+			            else
+			                return secondIdDistanceArray;
+
+			        }
+
+                    // Returns [id, distance] (null, null if no containment)
+			        FindNearestNode(position, graph)
+			        {
+			            // Leaf node
+			            if (!this.FirstChild && !this.SecondChild)
+			            {
+			                return this.GetDistanceInternal(position, graph);
+			            }
+
+			            if (!this.Bounds.ContainedInBoundingSphere(position))
 			                return [null, null];
 
 			            let firstIdDistanceArray = this.FirstChild.FindNearestNode(position, graph);
@@ -180,7 +208,7 @@
 
                         // Seems like a lot of cases to check if null and return the smaller
 			            if (!firstIdDistanceArray[1] && !secondIdDistanceArray[1])
-			                return [null, null];
+			                return this.GetDistanceInternal(position, graph);
 			            else if (secondIdDistanceArray[1] && !firstIdDistanceArray[1])
 			                return secondIdDistanceArray;
 			            else if (firstIdDistanceArray[1] && !secondIdDistanceArray[1])
@@ -359,11 +387,8 @@
 				}
 
 				let bestId_bestDistance = graph.FindNearestNode(47.2, 33.1);
+				console.log(graph.GetNode(bestId_bestDistance[0]).Position);
 				console.log(bestId_bestDistance[1]);
-
-				let myTempBox = new AlignedBoundingBox();
-				myTempBox.ExpandToInclude(new THREE.Vector3(1, 2, 3));
-				myTempBox.ExpandToInclude(new THREE.Vector3(-1, 2.2, 53));
 
 				geometry.addAttribute('color', new THREE.BufferAttribute(new Float32Array(vertexCount*3), 3));
 				let color = new THREE.Color();
