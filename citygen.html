@@ -27,13 +27,16 @@
 			function init() {
 
                 // TODO : Put these in another file...
-
+			    // SELF - NUMBER OF ELEMENTS IN ARRAY [] : Array.length
+			    // SELF - NUMBER OF ELEMENTS IN SET      : Set.length
+			    //      - NUMBER OF ELEMENTS IN DICT  {} : Object.keys(dict).length
 			    ////////////////////////////////////////////////////////////////////////////////
 
 			    class Node {
 			        constructor(id) {
 			            this.Id = id;
 			            this.Neighbors = new Set();
+			            this.Position = new THREE.Vector3(0,0,0);
 			            // Future : Edges?
 			        }
 
@@ -85,6 +88,228 @@
 
 			    ////////////////////////////////////////////////////////////////////////////////
 
+			    class AlignedBoundingBox {
+			        constructor() {
+			            this.Min = new THREE.Vector3(0, 0, 0);
+			            this.Max = new THREE.Vector3(0, 0, 0);
+			            this.Initialized = false;
+			        }
+
+                    // Inclusive of bounds
+			        Contains(position) {
+			            return ((this.Min.x <= position.x && this.Max.x >= position.x) &&
+                            (this.Min.y <= position.y && this.Max.y >= position.y) &&
+                            (this.Min.z <= position.z && this.Max.z >= position.z));
+			        }
+
+			        GetExtents() {
+                        // This is super lame
+			            let tempVec = new THREE.Vector3(0,0,0);
+			            tempVec.copy(this.Max);
+			            tempVec.sub(this.Min);
+			            return tempVec;
+			        }
+
+			        GetCenter() {
+			            // Also super lame
+			            let tempVec = new THREE.Vector3(0, 0, 0);
+			            tempVec.copy(this.Max);
+			            tempVec.add(this.Min);
+			            tempVec.multiplyScalar(0.5);
+			            return tempVec;
+			        }
+
+			        ExpandToInclude(threeVector3) {
+			            if (!this.Initialized) {
+			                this.Initialized = true;
+			                this.Min.copy(threeVector3);
+			                this.Max.copy(threeVector3);
+			                return;
+			            }
+
+			            this.Max.x = Math.max(this.Max.x, threeVector3.x);
+			            this.Max.y = Math.max(this.Max.y, threeVector3.y);
+			            this.Max.z = Math.max(this.Max.z, threeVector3.z);
+			            this.Min.x = Math.min(this.Min.x, threeVector3.x);
+			            this.Min.y = Math.min(this.Min.y, threeVector3.y);
+			            this.Min.z = Math.min(this.Min.z, threeVector3.z);
+			        }
+			    }
+
+			    ////////////////////////////////////////////////////////////////////////////////
+
+			    class BoxNode {
+			        constructor() {
+			            this.FirstChild = null;
+			            this.SecondChild = null;
+			            this.Bounds = new AlignedBoundingBox();
+			            this.NodeIds = [];
+			            this.MaxNodes = 7;
+			        }
+
+                    // Returns [id, distance] (null, null if no containment)
+			        FindNearestNode(position, graph)
+			        {
+
+			            // Leaf node
+			            if (!this.FirstChild && !this.SecondChild)
+			            {
+			                let bestDistance = null;
+			                let bestId = null;
+			                for (let i = 0; i < this.NodeIds.length; i++)
+			                {
+			                    let nodePosition = graph.GetNode(this.NodeIds[i]);
+			                    let displacement = new THREE.Vector3(nodePosition.x, nodePosition.y, nodePosition.z);
+			                    displacement.sub(position);
+			                    let distance = displacement.length();
+			                    if (!bestDistance || distance < bestDistance)
+			                    {
+			                        bestDistance = distance;
+			                        bestId = this.NodeIds[i];
+			                    }
+			                }
+
+			                return [bestId, bestDistance];
+			            }
+
+			            if (!this.Bounds.Contains(position))
+			                return [null, null];
+
+			            let firstIdDistanceArray = this.FirstChild.FindNearestNode(position, graph);
+			            let secondIdDistanceArray = this.SecondChild.FindNearestNode(position, graph);
+
+                        // Seems like a lot of cases to check if null and return the smaller
+			            if (!firstIdDistanceArray[1] && !secondIdDistanceArray[1])
+			                return [null, null];
+			            else if (secondIdDistanceArray[1] && !firstIdDistanceArray[1])
+			                return secondIdDistanceArray;
+			            else if (firstIdDistanceArray[1] && !secondIdDistanceArray[1])
+			                return firstIdDistanceArray;
+			            else if (firstIdDistanceArray[1] <= secondIdDistanceArray[1])
+			                return firstIdDistanceArray;
+			            else
+			                return secondIdDistanceArray;
+			        }
+
+			        AddNode(node)
+			        {
+                        // TODO : Check that it isn't already present...
+			            this.NodeIds.push(node.Id);
+			            this.Bounds.ExpandToInclude(node.Position);
+			        }
+
+			        Construct(nodeIds, graph)
+			        {
+			            if (nodeIds.length > this.MaxNodes)
+			            {
+			                // Split along largest dimension (kinda meh heuristic)
+			                let localBox = new AlignedBoundingBox();
+
+			                for (let i = 0; i < nodeIds.length; i++)
+			                {
+			                    let nodePosition = graph.GetNode(nodeIds[i]).Position;
+			                    localBox.ExpandToInclude(nodePosition);
+			                }
+
+                            // Find longest extent
+			                let splittingAlongX = false;
+			                let splittingAlongY = false;
+			                let splittingAlongZ = false;
+			                let boxExtents = localBox.GetExtents();
+
+			                if (boxExtents.x >= boxExtents.y && boxExtents.x >= boxExtents.z)
+			                    splittingAlongX = true;
+			                else if (boxExtents.y >= boxExtents.x && boxExtents.y >= boxExtents.z)
+			                    splittingAlongY = true;
+			                else
+			                    splittingAlongZ = true;
+
+			                let firstChildNodes = [];
+			                let secondChildNodes = [];
+
+			                for (let i = 0; i < nodeIds.length; i++)
+			                {
+			                    let nodePosition = graph.GetNode(nodeIds[i]).Position;
+
+                                // 'max' box
+			                    if ((splittingAlongX && (nodePosition.x >= localBox.GetCenter().x))
+                                    || (splittingAlongY && (nodePosition.y >= localBox.GetCenter().y))
+                                    || (splittingAlongZ && (nodePosition.z >= localBox.GetCenter().z)))
+			                    {
+			                        firstChildNodes.push(nodeIds[i]);
+			                    }
+                                // 'min' box
+			                    else
+			                    {
+			                        secondChildNodes.push(nodeIds[i]);
+			                    }
+			                }
+
+			                // Construct child nodes
+
+			                this.FirstChild = new BoxNode();
+			                this.FirstChild.Construct(firstChildNodes, graph);
+
+			                this.SecondChild = new BoxNode();
+			                this.SecondChild.Construct(secondChildNodes, graph);
+
+			                this.Bounds.ExpandToInclude(this.FirstChild.Bounds.Min);
+			                this.Bounds.ExpandToInclude(this.FirstChild.Bounds.Max);
+			                this.Bounds.ExpandToInclude(this.SecondChild.Bounds.Min);
+			                this.Bounds.ExpandToInclude(this.SecondChild.Bounds.Max);
+
+			                return;
+			            }
+
+			            // Leaf node
+			            for (let i = 0 ; i < nodeIds.length; i++)
+			                this.AddNode(graph.GetNode(nodeIds[i]));
+			        }
+			    }
+
+			    ////////////////////////////////////////////////////////////////////////////////
+
+			    class SpatialGraph extends Graph {
+			        constructor(width, height) {
+			            super();
+			            this.Bounds = new AlignedBoundingBox();
+			            this.Root = new BoxNode(); // Null if tree is dirty
+			        }
+
+			        AddNode(node) {
+			            super.AddNode(node);
+			            this.Bounds.ExpandToInclude(node.Position);
+			            this.Root = null;
+			        }
+
+                    // returns [node, distance]
+			        FindNearestNode(x, y) {
+			            console.log("Closest node");
+			            if (!this.Root)
+			            {
+			                this.Root = new BoxNode();
+			                let nodeArray = []
+			                for (let key in this.Nodes)
+			                    nodeArray.push(this.Nodes[key].Id);
+
+			                this.Root.Construct(nodeArray, this);
+			            }
+
+			            let bestId_bestDistance = this.Root.FindNearestNode(new THREE.Vector3(x, y, 0), this);
+                        
+			            return bestId_bestDistance;
+			        }
+
+			        Evaluate(x, y, property) {
+                        // TODO
+			            // Find triangle
+                        // Interpolate
+			        }
+			    }
+
+			    ////////////////////////////////////////////////////////////////////////////////
+
+
 				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 1, 1000 );
 				camera.position.z = 400;
 
@@ -102,7 +327,7 @@
 				let vertices = geometry.attributes.position;
 				let indices = geometry.index;
 
-				var graph = new Graph();
+				var graph = new SpatialGraph();
 
 				let percentOffset = 0.55;
 				let vertexCount = vertices.count;
@@ -132,6 +357,13 @@
 				    n1.AddNeighbor(n3);
 				    n2.AddNeighbor(n3);
 				}
+
+				let bestId_bestDistance = graph.FindNearestNode(47.2, 33.1);
+				console.log(bestId_bestDistance[1]);
+
+				let myTempBox = new AlignedBoundingBox();
+				myTempBox.ExpandToInclude(new THREE.Vector3(1, 2, 3));
+				myTempBox.ExpandToInclude(new THREE.Vector3(-1, 2.2, 53));
 
 				geometry.addAttribute('color', new THREE.BufferAttribute(new Float32Array(vertexCount*3), 3));
 				let color = new THREE.Color();
@@ -170,7 +402,6 @@
 				document.body.appendChild( renderer.domElement );
 
 				window.addEventListener( 'resize', onWindowResize, false );
-
 			}
 
 			function onWindowResize() {
