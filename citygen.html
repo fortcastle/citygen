@@ -20,6 +20,10 @@
 
 			var camera, scene, renderer;
 			var mesh;
+			var sphereNode = null;
+			var sphere;
+			var graph;
+			var geometry;
 
 			init();
 			animate();
@@ -37,9 +41,11 @@
 			            this.Id = id;
 			            this.Neighbors = new Set();
 			            this.Position = new THREE.Vector3(0, 0, 0);
-			            this.Mass = 0;
-			            this.Density = 1; // mass / m^2
-			            // Future : Edges?
+			            this.Mass = 0; // kg
+			            this.Density = 1; // kg / m^2
+			            this.Temperature = 0; // K
+			            this.Albedo = 0.8; // Percent light reflected
+			            this.HeatCapacity = 400; // J /(kg K)
 			        }
 
 			        SetPosition(position) {
@@ -72,6 +78,34 @@
 			            this.SecondNodeId = secondNodeId;
 			            this.ThirdNodeId = thirdNodeId;
 			            this.Area = null;
+			        }
+
+			        // TODO : Bad, need to use evaluate on the graph
+			        // Only makes sense for well-conditioned triangles
+			        GetAverageAlbedo(graph) {
+			            let triangleAlbedo = 0;
+			            triangleAlbedo += graph.GetNode(this.FirstNodeId).Albedo;
+			            triangleAlbedo += graph.GetNode(this.SecondNodeId).Albedo;
+			            triangleAlbedo += graph.GetNode(this.ThirdNodeId).Albedo;
+			            return triangleAlbedo / 3.;
+			        }
+
+			        // TODO : Bad, need to use evaluate on the graph
+			        // Only makes sense for well-conditioned triangles
+			        GetAverageTemperature(graph) {
+			            let triangleTemp = 0;
+			            triangleTemp += graph.GetNode(this.FirstNodeId).Temperature;
+			            triangleTemp += graph.GetNode(this.SecondNodeId).Temperature;
+			            triangleTemp += graph.GetNode(this.ThirdNodeId).Temperature;
+			            return triangleTemp / 3.;
+			        }
+
+			        GetCenter(graph) {
+			            let center = graph.GetNode(this.FirstNodeId).Position.clone();
+			            center.add(graph.GetNode(this.SecondNodeId).Position);
+			            center.add(graph.GetNode(this.ThirdNodeId).Position);
+			            center.divideScalar(3.);
+			            return center;
 			        }
 
 			        GetArea(graph) {
@@ -138,7 +172,7 @@
 			        constructor() {
 			            this.Nodes = {};
 			            this.NodeIdCounter = 0;
-			            this.Triangles = new TriangleCollection();
+			            this.Triangles = new TriangleCollection(); // Different would probably be clearer
 			        }
 
 			        AddNode(node) {
@@ -453,11 +487,11 @@
 				let deltaWidth = width / widthSegments;
 				let deltaHeight = height / heightSegments;
 
-				let geometry = new THREE.PlaneBufferGeometry(width,height,widthSegments,heightSegments);
+				geometry = new THREE.PlaneBufferGeometry(width,height,widthSegments,heightSegments);
 				let vertices = geometry.attributes.position;
 				let indices = geometry.index;
 
-				var graph = new SpatialGraph();
+				graph = new SpatialGraph();
 
 				let percentOffset = 0.55;
 				let vertexCount = vertices.count;
@@ -505,31 +539,20 @@
 				}
 
 				geometry.addAttribute('color', new THREE.BufferAttribute(new Float32Array(vertexCount*3), 3));
-				let color = new THREE.Color();
-				let colors = geometry.attributes.color;
+				//let color = new THREE.Color();
+				//let colors = geometry.attributes.color;
 
-			    // From https://stackoverflow.com/questions/5137831/map-a-range-of-values-e-g-0-255-to-a-range-of-colours-e-g-rainbow-red-b
-                // Assumes range [0, maxValue]
-				function RainbowColor(value, maxValue) {
-				    var i = (value * 255 / maxValue);
-				    var r = Math.round(Math.sin(0.024 * i + 0) * 127 + 128);
-				    var g = Math.round(Math.sin(0.024 * i + 2) * 127 + 128);
-				    var b = Math.round(Math.sin(0.024 * i + 4) * 127 + 128);
-				    //console.log([r, g, b]);
-				    return [r/255.,g/255.,b/255.];
-				}
-
-				let maxMass = null;
-				for (let i = 0; i < vertexCount; i++)
-				{
-				    if (!maxMass || maxMass < graph.GetNode(i).Mass)
-				        maxMass = graph.GetNode(i).Mass;
-				}
-				for (let i = 0; i < vertexCount; i++) {
-				    let nodeMass = graph.GetNode(i).Mass;
-				    let vertexColor = RainbowColor(nodeMass, maxMass);
-				    colors.setXYZ(i, vertexColor[0], vertexColor[1], vertexColor[2]);
-				}
+				//let maxMass = null;
+				//for (let i = 0; i < vertexCount; i++)
+				//{
+				//    if (!maxMass || maxMass < graph.GetNode(i).Mass)
+				//        maxMass = graph.GetNode(i).Mass;
+				//}
+				//for (let i = 0; i < vertexCount; i++) {
+				//    let nodeMass = graph.GetNode(i).Mass;
+				//    let vertexColor = RainbowColor(nodeMass, maxMass);
+				//    colors.setXYZ(i, vertexColor[0], vertexColor[1], vertexColor[2]);
+				//}
 
 				let material = new THREE.MeshBasicMaterial({
 				    color: 0xffffff,
@@ -543,7 +566,18 @@
 				let wireframe = new THREE.Mesh(geometry, wireframeMaterial);
 				mesh.add(wireframe);
 
+				let sphereGeometry = new THREE.SphereGeometry( 5, 32, 32 );
+				let sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+				sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+				let orbitRadius = 150;
+				let sphereHeight = 50;
+				sphere.translateX(orbitRadius);
+				sphere.translateZ(sphereHeight);
+				sphereNode = new THREE.Group();
+				sphereNode.add(sphere);
+
 				scene.add(mesh);
+				scene.add(sphereNode);
 
 				renderer = new THREE.WebGLRenderer( { antialias: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
@@ -562,7 +596,100 @@
 
 			}
 
+			// Update Temperatures
+			function UpdateTemperature(graph, sunPosition, sunPower, ambientTemperature) {
+			    let heatDictionary = {};
+			    for (let nodeId in graph.Nodes)
+			        heatDictionary[nodeId] = 0;
+
+			    // Calculate heat per triangle
+			    let triangleNormal = new THREE.Vector3(0, 0, 1);
+			    let relaxationConstant = 0.01;
+			    for (let key in graph.Triangles.Triangles) {
+			        let triangle = graph.Triangles.Triangles[key];
+			        let triangleCenter = triangle.GetCenter(graph);
+			        let triangleArea = triangle.GetArea(graph);
+			        let triangleAverageTemp = triangle.GetAverageTemperature(graph);
+			        let triangleToSunVector = sunPosition.clone().sub(triangleCenter);
+			        // Inverse square
+			        let localSunIntensity = sunPower / (4 * Math.PI * triangleToSunVector.lengthSq());
+			        let rawHeat = triangleArea * localSunIntensity
+			        // Deduct reflected light
+			        rawHeat *= (1. - triangle.GetAverageAlbedo(graph));
+			        // Deduct due to incident angle (normal area)
+			        rawHeat *= triangleNormal.dot(triangleToSunVector);
+			        // Loss to ambient temperature (kind of just made this up)
+			        let loss = triangleArea * (triangleAverageTemp - ambientTemperature) * relaxationConstant;
+			        rawHeat -= loss;
+			        heatDictionary[triangle.FirstNodeId] += rawHeat;
+			        heatDictionary[triangle.SecondNodeId] += rawHeat;
+			        heatDictionary[triangle.ThirdNodeId] += rawHeat;
+			    }
+
+			    // Propagate heat between nodes
+			    let minEdgeLength = 10; // Guessing, could calculate from graph
+			    for (let nodeId in graph.Nodes) {
+			        let node = graph.Nodes[nodeId];
+			        let neighbors = node.GetNeighbors();
+
+			        for (let neighborIndex in neighbors) {
+			            let neighborId = neighbors[neighborIndex];
+			            let neighbor = graph.GetNode(neighborId);
+			            let distanceBetweenNodes = node.Position.clone().sub(neighbor.Position).length();
+			            // Using 1/r for heat propagation ... made it up ... should probably be exponentially decreasing
+			            let distanceFactor = minEdgeLength / distanceBetweenNodes;
+			            // From node to neighbor
+			            // 0.5 because we're going to loop over this pair twice
+			            let heatTransfer = 0.5 * distanceFactor * relaxationConstant * (node.Temperature - neighbor.Temperature);
+			            heatDictionary[nodeId] -= heatTransfer;
+			            heatDictionary[neighborId] += heatTransfer;
+			        }
+			    }
+
+			    // Update temperatures
+			    for (let nodeId in graph.Nodes) {
+			        let node = graph.GetNode(nodeId);
+			        node.Temperature += heatDictionary[nodeId] / (node.Mass * node.HeatCapacity);
+			    }
+			}
+
+			// From https://stackoverflow.com/questions/5137831/map-a-range-of-values-e-g-0-255-to-a-range-of-colours-e-g-rainbow-red-b
+			// Assumes range [0, maxValue]
+			function RainbowColor(value, maxValue) {
+			    var i = (value * 255 / maxValue);
+			    var r = Math.round(Math.sin(0.024 * i + 0) * 127 + 128);
+			    var g = Math.round(Math.sin(0.024 * i + 2) * 127 + 128);
+			    var b = Math.round(Math.sin(0.024 * i + 4) * 127 + 128);
+			    //console.log([r, g, b]);
+			    return new THREE.Color(r / 255., g / 255., b / 255.);
+			}
+
 			function animate() {
+
+			    if (sphereNode)
+			    {
+			        // Update Temperatures
+			        let sunPosition = new THREE.Vector3(0, 0, 0);
+			        sphere.getWorldPosition(sunPosition);
+			        let sunPower = 10000;
+			        let ambientTemperature = 100;
+			        UpdateTemperature(graph, sunPosition, sunPower, ambientTemperature);
+
+			        // Update Color buffer
+			        let maxTemperature = 2 * ambientTemperature;
+			        let colors = geometry.attributes.color;
+			        for (let nodeId in graph.Nodes)
+			        {
+			            let nodeTemperature = 10*graph.GetNode(nodeId).Temperature;
+			            let vertexColor = RainbowColor(nodeTemperature, maxTemperature);
+			            colors.setXYZ(nodeId, vertexColor.r, vertexColor.g, vertexColor.b);
+			        }
+
+			        geometry.attributes.color.needsUpdate = true;
+
+			        // Request geometry update
+			        sphereNode.rotateZ(0.01);
+			    }
 
 				requestAnimationFrame( animate );
 				renderer.render( scene, camera );
