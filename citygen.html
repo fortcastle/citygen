@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 	<head>
 		<title>three.js webgl - geometry - cube</title>
@@ -12,14 +12,285 @@
 			}
 		</style>
 	</head>
-	<body>
+    <body>
 
-		<script src="src/three.js"></script>
+        <script src="src/three.js"></script>
 
-		<script>
+        <script>
 
-			var camera, scene, renderer;
-			var mesh;
+            ////////////////////////////////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class ShapeElement {
+                constructor() {
+                    this.Transform = new THREE.Matrix4();
+                    this.Children = [];
+                    this.Tag = "ShapeElement";
+                    this.Geometry = null;
+                    this.Material = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+                    this.Updated = false;
+
+                    this.Position = new THREE.Vector3(0,0,0);
+                    this.Rotation = new THREE.Quaternion(0,0,0,1);
+                    this.Scale = new THREE.Vector3(1,1,1);
+                }
+
+                UpdateTransform() {
+                    let pos = new THREE.Matrix4();
+                    pos.makeTranslation(this.Position.x,this.Position.y,this.Position.z);
+
+                    let rot = new THREE.Matrix4();
+                    rot.makeRotationFromQuaternion(this.Rotation);
+
+                    let scale = new THREE.Matrix4();
+                    scale.makeScale(this.Scale.x, this.Scale.y, this.Scale.z);
+
+                    this.Transform = pos.multiply(rot.multiply(scale));
+                }
+
+                SetPosition(position) {
+                    this.Position = position.clone();
+                    this.UpdateTransform();
+                }
+                SetRotation(rotation) {
+                    this.Rotation = rotation.clone();
+                    this.UpdateTransform();
+                }
+                SetScale(scale) {
+                    this.Scale = scale.clone();
+                    this.UpdateTransform();
+                }
+
+                AddElementsToGroup(group) {
+                    if (this.Geometry != null)
+                    {
+                        let localGroup = new THREE.Group();
+                        let mesh = new THREE.Mesh(this.Geometry, this.Material);
+                        let wireframeMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, wireframe: true });
+                        let wireframeMesh = new THREE.Mesh(this.Geometry, wireframeMaterial);
+                        localGroup.add(mesh);
+                        localGroup.add(wireframeMesh);
+                        localGroup.applyMatrix(this.Transform);
+                        group.add(localGroup);
+                        return;
+                    }
+
+                    let localGroup = new THREE.Group();
+
+                    for (let i = 0; i < this.Children.length; i++)
+                        this.Children[i].AddElementsToGroup(localGroup);
+
+                    localGroup.applyMatrix(this.Transform);
+                    group.add(localGroup);
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class WallSegment extends ShapeElement {
+                constructor(width, length, depth) {
+                    super();
+                    this.Tag = "WallSegment";
+                    this.Geometry = new THREE.BoxGeometry(width, length, depth);
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class Wall extends ShapeElement {
+                constructor(thickness, length, depth) {
+                    super();
+                    this.Tag = "Wall";
+                    // Tesselates along length
+                    let maxSegmentLength = 5.;
+                    let numSegments = Math.ceil(length/maxSegmentLength);
+                    let segmentLength = length / numSegments;
+                    this.Children = [];
+                    for(let i = 0; i < numSegments; i++)
+                    {
+                        let wallSegment = new WallSegment(thickness, segmentLength, depth);
+                        let lengthCenter = -0.5*length +  i*segmentLength + 0.5*segmentLength;
+                        wallSegment.SetPosition(new THREE.Vector3(0, lengthCenter, 0));
+                        this.Children.push(wallSegment);
+                    }
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class Room extends ShapeElement {
+                constructor(width, length, depth) {
+                    super();
+                    this.Tag = "Room";
+                    this.Width = width;
+                    this.Length = length;
+                    this.Depth = depth;
+                    // Top and bottom will have full width, left and right have reduced length due to thickness
+                    // Example :    ----------    instead of    |--------|
+                    //              |        |                  |        |
+                    //              ----------                  |--------|
+                    //
+                    let thickness = 0.15;
+                    this.Children = [
+                        new Wall(thickness, length - 2 * thickness, depth),  // Right
+                        new Wall(thickness, width, depth),                   // Up
+                        new Wall(thickness, length - 2 * thickness, depth),  // Left
+                        new Wall(thickness, width, depth)];                  // Down
+                    // Would prefer to use orbit instead of rotate and position here. 
+                    // Need to decide if that makes sense for other structures as well.
+                    let upVector = new THREE.Vector3(0,0,1);
+                    let halfPi = 0.5*Math.PI;
+                    let quaternion = new THREE.Quaternion();
+                    quaternion.setFromAxisAngle(upVector, 0);
+                    this.Children[0].SetRotation(quaternion);
+                    quaternion.setFromAxisAngle(upVector, halfPi);
+                    this.Children[1].SetRotation(quaternion);
+                    quaternion.setFromAxisAngle(upVector, 2 * halfPi);
+                    this.Children[2].SetRotation(quaternion);
+                    quaternion.setFromAxisAngle(upVector, -halfPi);
+                    this.Children[3].SetRotation(quaternion);
+
+                    let widthCenter = 0.5 * width - 0.5 * thickness;
+                    let lengthCenter = 0.5 * length - 0.5 * thickness;
+                    let depthCenter = 0.5 * depth;
+                    this.Children[0].SetPosition(new THREE.Vector3(widthCenter, 0, depthCenter));
+                    this.Children[1].SetPosition(new THREE.Vector3(0, lengthCenter, depthCenter));
+                    this.Children[2].SetPosition(new THREE.Vector3(-widthCenter, 0, depthCenter));
+                    this.Children[3].SetPosition(new THREE.Vector3(0, -lengthCenter, depthCenter));
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class ShapeString {
+                constructor() {
+                    this.Elements = [];
+                }
+
+                AddElement(element) {
+                    this.Elements.push(element);
+                }
+
+                AddElementsToGroup(group) {
+                    for (let i = 0; i < this.Elements.length; i++)
+                        this.Elements[i].AddElementsToGroup(group);
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class ShapeRules {
+                constructor() {
+                    this.Rules = [];
+                }
+
+                Update(oldString) {
+                    let newString = new ShapeString();
+
+                    for (let i = 0; i < this.Rules.length; i++)
+                        this.Rules[i].Update(oldString, newString);
+
+                    return newString;
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class ShapeRule {
+                constructor() {
+
+                }
+
+                Update(oldString, newString) {}
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+
+            class DivideRoom extends ShapeRule {
+                constructor() {
+                    super();
+                    this.Ratio = 0.5;
+                    this.Axis = 'x';
+                    this.MinWidth = 10;
+                }
+
+                Update(oldString, newString) {
+                    super.Update(oldString, newString);
+
+                    for (let i = 0; i < oldString.Elements.length; i++)
+                    {
+                        let shapeElement = oldString.Elements[i];
+                        if (shapeElement.Updated || shapeElement.Tag != "Room")
+                            continue;
+
+                        // Update :
+                        let firstNewRoom = null;
+                        let firstNewPosition = null;
+
+                        let secondNewRoom = null;
+                        let secondNewPosition = null;
+
+                        // Create two rooms of correct size
+                        if (this.Axis == 'x')
+                        {
+                            if (shapeElement.Width <= this.MinWidth)
+                                continue;
+
+                            let firstNewWidth = shapeElement.Width * this.Ratio;
+                            firstNewRoom = new Room(firstNewWidth, shapeElement.Length, shapeElement.Depth);
+                            let firstPositionOffset = 0.5 * (shapeElement.Width - firstNewWidth);
+                            firstNewPosition = shapeElement.Position.clone();
+                            firstNewPosition.x += firstPositionOffset;
+
+                            let secondNewWidth = shapeElement.Width - firstNewWidth;
+                            secondNewRoom = new Room(secondNewWidth, shapeElement.Length, shapeElement.Depth);
+                            let secondPositionOffset = 0.5 * (shapeElement.Width - secondNewWidth);
+                            secondNewPosition = shapeElement.Position.clone();
+                            secondNewPosition.x -= secondPositionOffset;
+                        }
+                        else if (this.Axis == 'y')
+                        {
+                            if (shapeElement.Length <= this.MinWidth)
+                                continue;
+
+                            let firstNewLength = shapeElement.Length * this.Ratio;
+                            firstNewRoom = new Room(shapeElement.Width, firstNewLength, shapeElement.Depth);
+                            let firstPositionOffset = 0.5 * (shapeElement.Length - firstNewLength);
+                            firstNewPosition = shapeElement.Position.clone();
+                            firstNewPosition.y += firstPositionOffset;
+
+                            let secondNewLength = shapeElement.Length - firstNewLength;
+                            secondNewRoom = new Room(shapeElement.Width, secondNewLength, shapeElement.Depth);
+                            let secondPositionOffset = 0.5 * (shapeElement.Length - secondNewLength);
+                            secondNewPosition = shapeElement.Position.clone();
+                            secondNewPosition.y -= secondPositionOffset;
+                        }
+
+                        // Set room transforms
+                        firstNewRoom.SetPosition(firstNewPosition);
+                        firstNewRoom.SetRotation(shapeElement.Rotation);
+                        firstNewRoom.SetScale(shapeElement.Scale);
+                        console.log(firstNewPosition);
+
+                        secondNewRoom.SetPosition(secondNewPosition);
+                        secondNewRoom.SetRotation(shapeElement.Rotation);
+                        secondNewRoom.SetScale(shapeElement.Scale);
+                        console.log(secondNewPosition);
+
+                        // Add finished rooms to new string
+                        newString.AddElement(firstNewRoom);
+                        newString.AddElement(secondNewRoom);
+
+                        shapeElement.Updated = true;
+                    }
+                }
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////////////////////////////////
+
+            var camera, scene, renderer;
+            var sceneGroup;
 
 			init();
 			animate();
@@ -27,27 +298,39 @@
 			function init() {
 
 				camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 1, 1000 );
-				camera.position.z = 400;
-
+				camera.position.z = 200;
 				scene = new THREE.Scene();
+				sceneGroup = new THREE.Group();
+				scene.add(sceneGroup);
 
-				var texture = new THREE.TextureLoader().load( 'crate.gif' );
+				let shapeString = new ShapeString();
+				let shapeRules = new ShapeRules();
 
-				var geometry = new THREE.BoxBufferGeometry( 200, 200, 200 );
-				var material = new THREE.MeshBasicMaterial( { map: texture } );
+			    ////////////////////////////////////////////////////////////////////////////////
 
-				mesh = new THREE.Mesh( geometry, material );
-				scene.add( mesh );
+				let ySubdivisionRule = new DivideRoom();
+				ySubdivisionRule.Axis = 'y';
+				shapeRules.Rules.push(ySubdivisionRule);
+
+				shapeString.AddElement(new Room(100, 220, 40));
+
+				for (let i = 0; i < 4; i++)
+				{
+				    shapeString = shapeRules.Update(shapeString);
+				    console.log(shapeString);
+				}
+
+				shapeString.AddElementsToGroup(sceneGroup);
+
+			    ////////////////////////////////////////////////////////////////////////////////
+                // Render setup
 
 				renderer = new THREE.WebGLRenderer( { antialias: true } );
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				document.body.appendChild( renderer.domElement );
 
-				//
-
 				window.addEventListener( 'resize', onWindowResize, false );
-
 			}
 
 			function onWindowResize() {
@@ -63,14 +346,14 @@
 
 				requestAnimationFrame( animate );
 
-				mesh.rotation.x += 0.005;
-				mesh.rotation.y += 0.01;
+				sceneGroup.rotation.x += 0.005;
+				sceneGroup.rotation.y += 0.01;
 
 				renderer.render( scene, camera );
 
 			}
 
-		</script>
+        </script>
 
-	</body>
+    </body>
 </html>
